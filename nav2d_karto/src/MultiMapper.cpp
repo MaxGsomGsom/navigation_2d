@@ -29,6 +29,9 @@ MultiMapper::MultiMapper()
 	mapperNode.param("publish_pose_graph", mPublishPoseGraph, true);
 	mapperNode.param("max_covariance", mMaxCovariance, 0.05);
 	mapperNode.param("min_map_size", mMinMapSize, 50);
+    mapperNode.param<double>("init_x", init_x, INT_MAX);
+    mapperNode.param<double>("init_y", init_y, INT_MAX);
+    mapperNode.param<double>("init_yaw", init_y, INT_MAX);
 
 	// Apply tf_prefix to all used frame-id's
 	mLaserFrame = mTransformListener.resolve(mLaserFrame);
@@ -149,7 +152,13 @@ MultiMapper::MultiMapper()
 	mMapChanged = true;
 	mLastMapUpdate = ros::WallTime(0);
 	
-	if(mRobotID == 1)
+
+    if (init_x != INT_MAX && init_y != INT_MAX && init_yaw != INT_MAX) {
+        mSelfLocalizer = NULL;
+        setRobotPose(init_x, init_y, init_yaw);
+        ROS_INFO("Initialized robot %d, starting to map now.", mRobotID);
+    }
+    else if(mRobotID == 1)
 	{
 		// I am the number one, so start mapping right away.
 		mState = ST_MAPPING;
@@ -190,13 +199,16 @@ void MultiMapper::setRobotPose(double x, double y, double yaw)
 	transform.setRotation(tf::createQuaternionFromYaw(yaw));
 	transform = transform.inverse();
 	
-	tf::Stamped<tf::Pose> pose_in, pose_out;
-	pose_in.setData(transform);
-	pose_in.frame_id_ = mRobotFrame;
-	pose_in.stamp_ = ros::Time(0);
-	mTransformListener.transformPose(mOdometryFrame, pose_in, pose_out);
-	
-	transform = pose_out;
+    if (init_x == INT_MAX || init_y == INT_MAX || init_yaw == INT_MAX) {
+        tf::Stamped<tf::Pose> pose_in, pose_out;
+        pose_in.setData(transform);
+        pose_in.frame_id_ = mRobotFrame;
+        pose_in.stamp_ = ros::Time(0);
+        mTransformListener.transformPose(mOdometryFrame, pose_in, pose_out);
+
+        transform = pose_out;
+    }
+
 	mOdometryOffset = transform.inverse();
 
 	if(mSelfLocalizer)
@@ -216,7 +228,7 @@ void MultiMapper::setRobotPose(double x, double y, double yaw)
 	mPosePublisher.publish(locResult);
 	
 	// Publish via tf
-	mState = ST_MAPPING;
+    mState = ST_MAPPING;
 	publishTransform();
 }
 
