@@ -84,9 +84,7 @@ private:
 	int mNodesAdded;            // Number of nodes added to the pose graph.
 	int mMinMapSize;            // Minimum map size (# of nodes) needed for localization.
 	ros::WallTime mLastMapUpdate;
-    double mInitX;
-    double mInitY;
-    double mInitYaw;
+    bool mInitFromTf;
     int mRobotsCount;
 
 	// Frames and Topics
