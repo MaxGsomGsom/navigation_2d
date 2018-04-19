@@ -9,10 +9,12 @@
 MultiMapper::MultiMapper()
 {
 	// Get parameters from the ROS parameter server
-	ros::NodeHandle robotNode;
+    ros::NodeHandle robotNode;
 	robotNode.param("robot_id", mRobotID, 1);
-	robotNode.param("scan_input_topic", mScanInputTopic, std::string("karto_in"));
-	robotNode.param("scan_output_topic", mScanOutputTopic, std::string("karto_out"));
+    robotNode.param("input_scan_topics", mInputScanTopics, std::string("shared_scans"));
+    robotNode.param("output_scan_topic", mOutputScanTopic, std::string("shared_scans"));
+    robotNode.param("base_ns", mBaseNS, std::string("robot"));
+    robotNode.param("r_count", mRobotsCount, 2);
 	robotNode.param("laser_frame", mLaserFrame, std::string("laser"));
 	robotNode.param("robot_frame", mRobotFrame, std::string("robot"));
 	robotNode.param("odometry_frame", mOdometryFrame, std::string("odometry_base"));
@@ -29,9 +31,9 @@ MultiMapper::MultiMapper()
 	mapperNode.param("publish_pose_graph", mPublishPoseGraph, true);
 	mapperNode.param("max_covariance", mMaxCovariance, 0.05);
 	mapperNode.param("min_map_size", mMinMapSize, 50);
-    mapperNode.param<double>("init_x", init_x, INT_MAX);
-    mapperNode.param<double>("init_y", init_y, INT_MAX);
-    mapperNode.param<double>("init_yaw", init_y, INT_MAX);
+    mapperNode.param<double>("init_x", mInitX, INT_MAX);
+    mapperNode.param<double>("init_y", mInitY, INT_MAX);
+    mapperNode.param<double>("init_yaw", mInitY, INT_MAX);
 
 	// Apply tf_prefix to all used frame-id's
 	mLaserFrame = mTransformListener.resolve(mLaserFrame);
@@ -41,11 +43,17 @@ MultiMapper::MultiMapper()
 	mMapFrame = mTransformListener.resolve(mMapFrame);
 
 	// Initialize Publisher/Subscribers
-	mScanSubscriber = robotNode.subscribe(mScanInputTopic, 100, &MultiMapper::receiveLocalizedScan, this);
-	mScanPublisher = robotNode.advertise<nav2d_msgs::LocalizedScan>(mScanOutputTopic, 100, true);
+    for (int i=0; i<mRobotsCount; i++) {
+        if (i!=mRobotID) {
+            std::string subName = ros::names::append("/" + mBaseNS + std::to_string(i), mInputScanTopics);
+            mScanSubscribers.push_back(robotNode.subscribe(subName, 100, &MultiMapper::receiveLocalizedScan, this));
+        }
+    }
+    std::string pubName = ros::names::append("/" + mBaseNS + std::to_string(mRobotID), mOutputScanTopic);
+    mScanPublisher = robotNode.advertise<nav2d_msgs::LocalizedScan>(pubName, 100, true);
 	mMapServer = robotNode.advertiseService(mMapService, &MultiMapper::getMap, this);
 	mMapPublisher = robotNode.advertise<nav_msgs::OccupancyGrid>(mMapTopic, 1, true);
-	mLaserSubscriber = robotNode.subscribe(mLaserTopic, 100, &MultiMapper::receiveLaserScan, this);
+    mLaserSubscriber = robotNode.subscribe(mLaserTopic, 100, &MultiMapper::receiveLaserScan, this);
 	mInitialPoseSubscriber = robotNode.subscribe("initialpose", 1, &MultiMapper::receiveInitialPose, this);
 	mOtherRobotsPublisher = robotNode.advertise<nav2d_msgs::RobotPose>("others", 10, true);
 
@@ -146,19 +154,19 @@ MultiMapper::MultiMapper()
 	mLaser = NULL;
 	
 	// Initialize Variables
-	mMapToOdometry.setIdentity();
+    mMapToOdometry.setIdentity();
 	mOdometryOffset.setIdentity();
 	mNodesAdded = 0;
 	mMapChanged = true;
 	mLastMapUpdate = ros::WallTime(0);
 	
 
-    if (init_x != INT_MAX && init_y != INT_MAX && init_yaw != INT_MAX) {
+    if (mInitX != INT_MAX && mInitY != INT_MAX && mInitYaw != INT_MAX) {
         mSelfLocalizer = NULL;
-        setRobotPose(init_x, init_y, init_yaw);
+        setRobotPose(mInitX, mInitY, mInitYaw);
         ROS_INFO("Initialized robot %d, starting to map now.", mRobotID);
     }
-    else if(mRobotID == 1)
+    else if(mRobotID == 0)
 	{
 		// I am the number one, so start mapping right away.
 		mState = ST_MAPPING;
@@ -173,13 +181,14 @@ MultiMapper::MultiMapper()
 		locResult.pose.position.z = 0;
 		locResult.pose.orientation = tf::createQuaternionMsgFromYaw(0);
 		mPosePublisher.publish(locResult);
-	}else
+    }
+    else
 	{
 		// I am not number one, so wait to receive a map from number one.
 		mState = ST_WAITING_FOR_MAP;
-		ROS_INFO("Initialized robot %d, waiting for map from robot 1 now.", mRobotID);
+        ROS_INFO("Initialized robot %d, waiting for map from robot 0 now.", mRobotID);
 		mSelfLocalizer = new SelfLocalizer();
-	}
+    }
 }
 
 MultiMapper::~MultiMapper()
@@ -198,8 +207,8 @@ void MultiMapper::setRobotPose(double x, double y, double yaw)
 	transform.setOrigin(tf::Vector3(x, y, 0));
 	transform.setRotation(tf::createQuaternionFromYaw(yaw));
 	transform = transform.inverse();
-	
-    if (init_x == INT_MAX || init_y == INT_MAX || init_yaw == INT_MAX) {
+
+    if (mInitX == INT_MAX || mInitY == INT_MAX || mInitYaw == INT_MAX) {
         tf::Stamped<tf::Pose> pose_in, pose_out;
         pose_in.setData(transform);
         pose_in.frame_id_ = mRobotFrame;
@@ -209,7 +218,7 @@ void MultiMapper::setRobotPose(double x, double y, double yaw)
         transform = pose_out;
     }
 
-	mOdometryOffset = transform.inverse();
+    mOdometryOffset = transform.inverse();
 
 	if(mSelfLocalizer)
 	{
@@ -227,9 +236,9 @@ void MultiMapper::setRobotPose(double x, double y, double yaw)
 	locResult.pose.orientation = tf::createQuaternionMsgFromYaw(yaw);
 	mPosePublisher.publish(locResult);
 	
-	// Publish via tf
+    // Publish via tf
     mState = ST_MAPPING;
-	publishTransform();
+    publishTransform();
 }
 
 karto::LocalizedRangeScan* MultiMapper::createFromRosMessage(const sensor_msgs::LaserScan& scan, const karto::Identifier& robot)
@@ -314,7 +323,7 @@ void MultiMapper::receiveLaserScan(const sensor_msgs::LaserScan::ConstPtr& scan)
 	}else 
 	if(mState == ST_MAPPING)
 	{
-		// get the odometry pose from tf
+        // get the odometry pose from tf
 		tf::StampedTransform tfPose;
 		try
 		{
@@ -697,9 +706,9 @@ void MultiMapper::onMessage(const void* sender, karto::MapperEventArguments& arg
 
 void MultiMapper::publishTransform()
 {
-	if(mState == ST_MAPPING)
-	{
-		mTransformBroadcaster.sendTransform(tf::StampedTransform (mOdometryOffset, ros::Time::now() , mOffsetFrame, mOdometryFrame));
-		mTransformBroadcaster.sendTransform(tf::StampedTransform (mMapToOdometry, ros::Time::now() , mMapFrame, mOffsetFrame));
+    if(mState == ST_MAPPING)
+    {
+        mTransformBroadcaster.sendTransform(tf::StampedTransform (mOdometryOffset, ros::Time::now() , mOffsetFrame, mOdometryFrame));
+        mTransformBroadcaster.sendTransform(tf::StampedTransform (mMapToOdometry, ros::Time::now() , mMapFrame, mOffsetFrame));
 	}
 }

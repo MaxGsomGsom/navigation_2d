@@ -64,7 +64,7 @@ private:
 	ros::Publisher mPosePublisher;
 	ros::Publisher mOtherRobotsPublisher;
 	ros::Subscriber mLaserSubscriber;
-	ros::Subscriber mScanSubscriber;
+    std::vector<ros::Subscriber> mScanSubscribers;
 	ros::Subscriber mInitialPoseSubscriber;
 
 	// Everything related to KARTO
@@ -84,9 +84,10 @@ private:
 	int mNodesAdded;            // Number of nodes added to the pose graph.
 	int mMinMapSize;            // Minimum map size (# of nodes) needed for localization.
 	ros::WallTime mLastMapUpdate;
-    double init_x;
-    double init_y;
-    double init_yaw;
+    double mInitX;
+    double mInitY;
+    double mInitYaw;
+    int mRobotsCount;
 
 	// Frames and Topics
 	std::string mLaserFrame;
@@ -97,8 +98,9 @@ private:
 	std::string mLaserTopic;
 	std::string mMapTopic;
 	std::string mMapService;
-	std::string mScanInputTopic;
-	std::string mScanOutputTopic;
+	std::string mInputScanTopics;
+    std::string mOutputScanTopic;
+	std::string mBaseNS;
 };
 
 #endif
